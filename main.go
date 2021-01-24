@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -10,7 +11,17 @@ import (
 	"github.com/hiroygo/gcpbbs/lib"
 )
 
+func mustGetenv(k string) string {
+	v := os.Getenv(k)
+	if v == "" {
+		log.Fatalf("%s environment variable not set error\n", k)
+	}
+	return v
+}
+
 func main() {
+	// Cloud Storage
+	bName := mustGetenv("GCS_BUCKET")
 	gcsClient, err := storage.NewClient(context.Background())
 	if err != nil {
 		log.Fatal(err)
@@ -18,19 +29,26 @@ func main() {
 	defer gcsClient.Close()
 	bucket := lib.NewGCSBucket(gcsClient, bName)
 
-	dsn, ok := os.LookupEnv("MYSQL_DSN")
-	if !ok {
-		log.Fatal("環境変数 MYSQL_DSN が見つかりません")
+	// Cloud SQL
+	dbUser := mustGetenv("DB_USER")
+	dbPwd := mustGetenv("DB_PASS")
+	instanceConnectionName := mustGetenv("INSTANCE_CONNECTION_NAME")
+	dbName := mustGetenv("DB_NAME")
+	socketDir, isSet := os.LookupEnv("DB_SOCKET_DIR")
+	if !isSet {
+		socketDir = "/cloudsql"
 	}
+	dsn := fmt.Sprintf("%s:%s@unix(/%s/%s)/%s?parseTime=true&loc=Asia%2FTokyo", dbUser, dbPwd, socketDir, instanceConnectionName, dbName)
 	db, err := lib.NewMySQL(dsn)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer db.Close()
 
+	// Port
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = "8080"
+		port = "80"
 	}
 	log.Println("Listening on port: " + port)
 
