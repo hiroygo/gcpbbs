@@ -1,4 +1,7 @@
 # gcpbbs
+* 画像の保存には Google Cloud Storage を使う
+* 投稿内容の保存には Cloud SQL を使う
+
 ## MySQL でテーブル作成
 ```
 CREATE TABLE posts (id INTEGER UNSIGNED NOT NULL AUTO_INCREMENT,name VARCHAR(50) NOT NULL, body TEXT NOT NULL, imageurl VARCHAR(512), created_at DATETIME NOT NULL, PRIMARY KEY (id));
