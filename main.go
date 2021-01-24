@@ -38,7 +38,7 @@ func main() {
 	if !isSet {
 		socketDir = "/cloudsql"
 	}
-	dsn := fmt.Sprintf("%s:%s@unix(/%s/%s)/%s?parseTime=true&loc=Asia%2FTokyo", dbUser, dbPwd, socketDir, instanceConnectionName, dbName)
+	dsn := fmt.Sprintf("%s:%s@unix(/%s/%s)/%s?parseTime=true&loc=Asia%%2FTokyo", dbUser, dbPwd, socketDir, instanceConnectionName, dbName)
 	db, err := lib.NewMySQL(dsn)
 	if err != nil {
 		log.Fatal(err)
