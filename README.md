@@ -1,4 +1,5 @@
 # gcpbbs
+* アプリケーションホスティングには Google App Engine を使う
 * 画像の保存には Google Cloud Storage を使う
 * 投稿内容の保存には Cloud SQL を使う
 
