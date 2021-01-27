@@ -14,6 +14,8 @@ import (
 	_ "image/png"
 )
 
+const maxFilesize = 1024 * 1024 * 2
+
 type Server struct {
 	bucket CloudStorageBucket
 	db     DB
@@ -46,8 +48,7 @@ func (sv *Server) postHandler(w http.ResponseWriter, r *http.Request) {
 	img, imgh, err := r.FormFile("attachment-file")
 	switch err {
 	case nil:
-		const maxfilesize = 1024 * 1024 * 2
-		if imgh.Size > maxfilesize {
+		if imgh.Size > maxFilesize {
 			log.Println(http.StatusText(http.StatusRequestEntityTooLarge))
 			http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
 			return

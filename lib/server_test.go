@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"image"
 	_ "image/jpeg"
+	"image/png"
 	_ "image/png"
 	"io"
 	"io/ioutil"
@@ -89,7 +90,7 @@ func TestGetHandler(t *testing.T) {
 	}
 }
 
-func newPostRequest(name, body string, img io.ReadSeeker) (*http.Request, error) {
+func newPostRequest(name, body string, img []byte) (*http.Request, error) {
 	var buf bytes.Buffer
 	writer := multipart.NewWriter(&buf)
 
@@ -107,22 +108,14 @@ func newPostRequest(name, body string, img io.ReadSeeker) (*http.Request, error)
 
 	// image
 	if img != nil {
-		_, format, err := image.DecodeConfig(img)
-		if err != nil {
-			return nil, fmt.Errorf("DecodeConfig error, %v", err)
-		}
-		if _, err := img.Seek(0, io.SeekStart); err != nil {
-			return nil, fmt.Errorf("Seek error, %v", err)
-		}
 		imgHeader := make(textproto.MIMEHeader)
-		imgHeader.Set("Content-Type", "image/"+format)
-		imgHeader.Set("Content-Disposition", `form-data; name="attachment-file"; filename="dummy,jpg"`)
+		imgHeader.Set("Content-Disposition", `form-data; name="attachment-file"; filename="dummy"`)
 		imgPart, err := writer.CreatePart(imgHeader)
 		if err != nil {
 			return nil, fmt.Errorf("CreatePart error, %v", err)
 		}
-		if _, err := io.Copy(imgPart, img); err != nil {
-			return nil, fmt.Errorf("Copy error, %v", err)
+		if _, err := imgPart.Write(img); err != nil {
+			return nil, fmt.Errorf("Write error, %v", err)
 		}
 	}
 
@@ -137,16 +130,56 @@ func newPostRequest(name, body string, img io.ReadSeeker) (*http.Request, error)
 }
 
 func TestPostHandler(t *testing.T) {
+	createPng := func(filesize int) (path string, rerr error) {
+		// Width*Height*RGBA >= fileSize
+		img := image.NewNRGBA(image.Rect(0, 0, filesize/4, 1))
+
+		p := filepath.Join(t.TempDir(), "img")
+		f, err := os.Create(p)
+		if err != nil {
+			return "", fmt.Errorf("Create error, %v", err)
+		}
+		defer func() {
+			if err := f.Close(); err != nil {
+				rerr = err
+			}
+		}()
+
+		e := png.Encoder{CompressionLevel: png.NoCompression}
+		if err := e.Encode(f, img); err != nil {
+			return "", fmt.Errorf("Encode error, %v", err)
+		}
+		return p, nil
+	}
+	loadImg := func(path string) ([]byte, error) {
+		if path == "" {
+			return nil, nil
+		}
+		b, err := ioutil.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("ReadFile error, %v", err)
+		}
+		return b, nil
+	}
+
+	largePng, err := createPng(lib.ExportMaxFilesize)
+	if err != nil {
+		t.Fatalf("createPng error, %v", err)
+	}
+
 	cases := []struct {
-		name         string
-		expectedName string
-		expectedBody string
-		expectedTime time.Time
-		imgPath      string
+		name              string
+		expectedName      string
+		expectedBody      string
+		expectedCreatedAt time.Time
+		imgPath           string
+		wantErr           bool
 	}{
-		{name: "jpeg", expectedName: "Sophia", expectedBody: "bowwow", expectedTime: time.Now(), imgPath: "../testdata/go.jpg"},
-		{name: "png", expectedName: "gopher", expectedBody: "hello", expectedTime: time.Now(), imgPath: "../testdata/go.png"},
-		{name: "noimage", expectedName: "koro", expectedBody: "wanwan", expectedTime: time.Now(), imgPath: ""},
+		{name: "jpeg", expectedName: "Sophia", expectedBody: "bowwow", expectedCreatedAt: time.Now(), imgPath: "../testdata/go.jpg", wantErr: false},
+		{name: "png", expectedName: "gopher", expectedBody: "hello", expectedCreatedAt: time.Now(), imgPath: "../testdata/go.png", wantErr: false},
+		{name: "noimage", expectedName: "koro", expectedBody: "wanwan", expectedCreatedAt: time.Now(), imgPath: "", wantErr: false},
+		{name: "maxfilesize err", expectedName: "koro", expectedBody: "wanwan", expectedCreatedAt: time.Now(), imgPath: largePng, wantErr: true},
+		{name: "not an image err", expectedName: "koro", expectedBody: "wanwan", expectedCreatedAt: time.Now(), imgPath: "../testdata/go.txt", wantErr: true},
 	}
 
 	for _, c := range cases {
@@ -154,47 +187,40 @@ func TestPostHandler(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 
-			var expectedImg []byte
-			var expectedImgReader io.ReadSeeker
-			if c.imgPath != "" {
-				var err error
-				expectedImg, err = ioutil.ReadFile(c.imgPath)
-				if err != nil {
-					t.Fatalf("ReadFile error, %v", err)
-				}
-				expectedImgReader = bytes.NewReader(expectedImg)
+			expectedImg, err := loadImg(c.imgPath)
+			if err != nil {
+				t.Fatalf("ReadFile error, %v", err)
 			}
-
-			r, err := newPostRequest(c.expectedName, c.expectedBody, expectedImgReader)
+			r, err := newPostRequest(c.expectedName, c.expectedBody, expectedImg)
 			if err != nil {
 				t.Fatalf("newPostRequest error, %v", err)
 			}
 			w := httptest.NewRecorder()
-			sv := lib.NewServer(&testLocalBucket{dir: t.TempDir()}, &testDB{createdAt: c.expectedTime})
+			sv := lib.NewServer(&testLocalBucket{dir: t.TempDir()}, &testDB{createdAt: c.expectedCreatedAt})
 			lib.ExportServerPostHandler(sv, w, r)
 			rw := w.Result()
 			defer rw.Body.Close()
 
-			if rw.StatusCode != http.StatusOK {
+			if !c.wantErr && rw.StatusCode != http.StatusOK {
 				t.Fatalf("Status code error, %v", rw.StatusCode)
+			}
+			if c.wantErr && rw.StatusCode != http.StatusOK {
+				return
 			}
 			var actual lib.Post
 			if err := json.NewDecoder(rw.Body).Decode(&actual); err != nil {
 				t.Fatalf("Decode error, %v", err)
 			}
-			if actual.Name != c.expectedName || actual.Body != c.expectedBody ||
-				!actual.CreatedAt.Equal(c.expectedTime) {
-				t.Errorf("want postHandler() = (%v, %v, %v), got (%v, %v, %v)",
-					c.expectedName, c.expectedBody, c.expectedTime, actual.Name, actual.Body, actual.CreatedAt)
+			if actual.Name != c.expectedName || actual.Body != c.expectedBody || !actual.CreatedAt.Equal(c.expectedCreatedAt) {
+				t.Fatalf("want postHandler() = (%v, %v, %v), got (%v, %v, %v)",
+					c.expectedName, c.expectedBody, c.expectedCreatedAt, actual.Name, actual.Body, actual.CreatedAt)
 			}
-			if expectedImg != nil {
-				img, err := ioutil.ReadFile(actual.ImageURL)
-				if err != nil {
-					t.Fatalf("ReadFile error, %v", err)
-				}
-				if !bytes.Equal(expectedImg, img) {
-					t.Fatal("Image does not match error")
-				}
+			actualImg, err := loadImg(actual.ImageURL)
+			if err != nil {
+				t.Fatalf("loadImg error, %v", err)
+			}
+			if !bytes.Equal(actualImg, expectedImg) {
+				t.Fatal("Image does not match error")
 			}
 		})
 	}
