@@ -5,9 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"image"
-	_ "image/jpeg"
 	"image/png"
-	_ "image/png"
 	"io"
 	"io/ioutil"
 	"mime/multipart"
@@ -201,11 +199,11 @@ func TestPostHandler(t *testing.T) {
 			rw := w.Result()
 			defer rw.Body.Close()
 
-			if !c.wantErr && rw.StatusCode != http.StatusOK {
-				t.Fatalf("Status code error, %v", rw.StatusCode)
-			}
 			if c.wantErr && rw.StatusCode != http.StatusOK {
 				return
+			}
+			if rw.StatusCode != http.StatusOK {
+				t.Fatalf("Status code error, %v", rw.StatusCode)
 			}
 			var actual lib.Post
 			if err := json.NewDecoder(rw.Body).Decode(&actual); err != nil {
