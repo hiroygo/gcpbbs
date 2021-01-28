@@ -76,7 +76,7 @@ func TestGetHandler(t *testing.T) {
 		t.Fatalf("Decode error, %v", err)
 	}
 	if len(actual) != len(expected) {
-		t.Fatalf("want getHandler() = %v, got %v", expected, actual)
+		t.Fatalf("len error, len(expected): %v != len(actual): %v", len(expected), len(actual))
 	}
 	for i := range actual {
 		a := actual[i]
@@ -128,22 +128,23 @@ func newPostRequest(name, body string, img []byte) (*http.Request, error) {
 }
 
 func TestPostHandler(t *testing.T) {
-	createPng := func(filesize int) (path string, rerr error) {
-		// Width*Height*RGBA >= fileSize
-		img := image.NewNRGBA(image.Rect(0, 0, filesize/4, 1))
-
-		p := filepath.Join(t.TempDir(), "img")
+	tempDir := t.TempDir()
+	createPng := func(name string, minFilesize int) (path string, rerr error) {
+		p := filepath.Join(tempDir, name)
 		f, err := os.Create(p)
 		if err != nil {
 			return "", fmt.Errorf("Create error, %v", err)
 		}
 		defer func() {
 			if err := f.Close(); err != nil {
-				rerr = err
+				rerr = fmt.Errorf("Close error, %v", err)
 			}
 		}()
 
 		e := png.Encoder{CompressionLevel: png.NoCompression}
+		// png filesize = Width*Height*RGBA + other data
+		// Width*Height*RGBA = minFilesize
+		img := image.NewNRGBA(image.Rect(0, 0, minFilesize/4, 1))
 		if err := e.Encode(f, img); err != nil {
 			return "", fmt.Errorf("Encode error, %v", err)
 		}
@@ -160,7 +161,8 @@ func TestPostHandler(t *testing.T) {
 		return b, nil
 	}
 
-	largePng, err := createPng(lib.ExportMaxFilesize)
+	// create test data
+	largePng, err := createPng("largePng", lib.ExportMaxFilesize)
 	if err != nil {
 		t.Fatalf("createPng error, %v", err)
 	}
@@ -187,14 +189,14 @@ func TestPostHandler(t *testing.T) {
 
 			expectedImg, err := loadImg(c.imgPath)
 			if err != nil {
-				t.Fatalf("ReadFile error, %v", err)
+				t.Fatalf("loadImg error, %v", err)
 			}
 			r, err := newPostRequest(c.expectedName, c.expectedBody, expectedImg)
 			if err != nil {
 				t.Fatalf("newPostRequest error, %v", err)
 			}
 			w := httptest.NewRecorder()
-			sv := lib.NewServer(&testLocalBucket{dir: t.TempDir()}, &testDB{createdAt: c.expectedCreatedAt})
+			sv := lib.NewServer(&testLocalBucket{dir: tempDir}, &testDB{createdAt: c.expectedCreatedAt})
 			lib.ExportServerPostHandler(sv, w, r)
 			rw := w.Result()
 			defer rw.Body.Close()
