@@ -21,13 +21,12 @@ func mustGetenv(k string) string {
 
 func main() {
 	// Cloud Storage
-	bName := mustGetenv("GCS_BUCKET")
 	gcsClient, err := storage.NewClient(context.Background())
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer gcsClient.Close()
-	bucket := lib.NewGCSBucket(gcsClient, bName)
+	bucket := lib.NewGCSBucket(gcsClient, mustGetenv("GCS_BUCKET"))
 
 	// Cloud SQL
 	dbUser := mustGetenv("DB_USER")
@@ -45,13 +44,11 @@ func main() {
 	}
 	defer db.Close()
 
-	// Port
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "80"
 	}
 	log.Println("Listening on port: " + port)
-
 	sv := lib.NewServer(bucket, db)
 	if err := http.ListenAndServe(":"+port, sv); err != nil {
 		log.Fatal(err)

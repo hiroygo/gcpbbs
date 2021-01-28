@@ -15,16 +15,16 @@ type CloudStorageBucket interface {
 	Upload(objName string, obj io.Reader) (string, error)
 }
 
-type GCSBucket struct {
+type gcsBucket struct {
 	client *storage.Client
 	name   string
 }
 
 func NewGCSBucket(c *storage.Client, name string) CloudStorageBucket {
-	return &GCSBucket{client: c, name: name}
+	return &gcsBucket{client: c, name: name}
 }
 
-func (b *GCSBucket) Upload(objName string, obj io.Reader) (string, error) {
+func (b *gcsBucket) Upload(objName string, obj io.Reader) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*1)
 	defer cancel()
 
