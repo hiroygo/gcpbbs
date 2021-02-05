@@ -34,13 +34,15 @@ func (sv *Server) postHandler(w http.ResponseWriter, r *http.Request) {
 	// e.g. Content-Disposition: form-data; name="json"; filename="json"
 	data := r.FormValue("json")
 	if data == "" {
-		log.Println("Empty json error")
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		msg := "Empty json error"
+		log.Println(msg)
+		writeErrorJSON(w, http.StatusBadRequest, msg)
 		return
 	}
 	if err := json.Unmarshal([]byte(data), &p); err != nil {
-		log.Printf("Unmarshal error, %v", err)
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		msg := fmt.Sprintf("Unmarshal error, %v", err)
+		log.Println(msg)
+		writeErrorJSON(w, http.StatusBadRequest, msg)
 		return
 	}
 
@@ -49,35 +51,40 @@ func (sv *Server) postHandler(w http.ResponseWriter, r *http.Request) {
 	switch err {
 	case nil:
 		if imgh.Size > maxFilesize {
-			log.Println(http.StatusText(http.StatusRequestEntityTooLarge))
-			http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
+			msg := http.StatusText(http.StatusRequestEntityTooLarge)
+			log.Println(msg)
+			writeErrorJSON(w, http.StatusRequestEntityTooLarge, msg)
 			return
 		}
 
 		// 画像か確認する
 		_, format, err := image.DecodeConfig(img)
 		if err != nil {
-			log.Printf("DecodeConfig error, %v", err)
-			http.Error(w, http.StatusText(http.StatusUnsupportedMediaType), http.StatusUnsupportedMediaType)
+			msg := fmt.Sprintf("DecodeConfig error, %v", err)
+			log.Println(msg)
+			writeErrorJSON(w, http.StatusUnsupportedMediaType, msg)
 			return
 		}
 		// DecodeConfig で移動した offset を先頭に戻す
 		// DecodeConfig はファイルヘッダなどを読み、ファイル全体は読み込まない
 		if _, err := img.Seek(0, io.SeekStart); err != nil {
-			log.Printf("Seek error, %v", err)
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			msg := fmt.Sprintf("Seek error, %v", err)
+			log.Println(msg)
+			writeErrorJSON(w, http.StatusInternalServerError, msg)
 			return
 		}
 
 		filename, err := randomFilename("." + format)
 		if err != nil {
-			log.Printf("randomFilename error, %v", err)
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			msg := fmt.Sprintf("randomFilename error, %v", err)
+			log.Println(msg)
+			writeErrorJSON(w, http.StatusInternalServerError, msg)
 		}
 		url, err := sv.bucket.Upload(filename, img)
 		if err != nil {
-			log.Printf("Upload error, %v", err)
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			msg := fmt.Sprintf("Upload error, %v", err)
+			log.Println(msg)
+			writeErrorJSON(w, http.StatusInternalServerError, msg)
 			return
 		}
 
@@ -85,40 +92,44 @@ func (sv *Server) postHandler(w http.ResponseWriter, r *http.Request) {
 	case http.ErrMissingFile:
 		p.ImageURL = ""
 	default:
-		log.Printf("FormFile error, %v", err)
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		msg := fmt.Sprintf("FormFile error, %v", err)
+		log.Println(msg)
+		writeErrorJSON(w, http.StatusInternalServerError, msg)
 		return
 	}
 
 	// 投稿内容をデータベースに登録する
 	ret, err := sv.db.Insert(p)
 	if err != nil {
-		log.Printf("Insert error, %v", err)
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		msg := fmt.Sprintf("Insert error, %v", err)
+		log.Println(msg)
+		writeErrorJSON(w, http.StatusInternalServerError, msg)
 		return
 	}
 
 	// 登録結果をクライアントに返す
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	if err := json.NewEncoder(w).Encode(ret); err != nil {
-		log.Printf("Encode error, %v", err)
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		msg := fmt.Sprintf("Encode error, %v", err)
+		log.Println(msg)
+		writeErrorJSON(w, http.StatusInternalServerError, msg)
 	}
 }
 
 func (sv *Server) getHandler(w http.ResponseWriter, r *http.Request) {
 	ps, err := sv.db.GetAll()
 	if err != nil {
-		log.Printf("GetAll error, %v", err)
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		msg := fmt.Sprintf("GetAll error, %v", err)
+		log.Println(msg)
+		writeErrorJSON(w, http.StatusInternalServerError, msg)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	if err := json.NewEncoder(w).Encode(ps); err != nil {
-		log.Printf("Encode error, %v", err)
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return
+		msg := fmt.Sprintf("Encode error, %v", err)
+		log.Println(msg)
+		writeErrorJSON(w, http.StatusInternalServerError, msg)
 	}
 }
 
@@ -142,7 +153,13 @@ func (sv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+	writeErrorJSON(w, http.StatusForbidden, http.StatusText(http.StatusForbidden))
+}
+
+func writeErrorJSON(w http.ResponseWriter, status int, message string) {
+	w.WriteHeader(status)
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Write([]byte(fmt.Sprintf(`{"error":"%s"}`, message)))
 }
 
 func randomFilename(ext string) (string, error) {

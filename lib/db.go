@@ -61,7 +61,7 @@ func (s *mySQL) Insert(p Post) (rp Post, rerr error) {
 	}
 
 	if err := s.rawDB.QueryRow("SELECT name, body, imageurl, created_at FROM posts WHERE id = ?", id).Scan(&rp.Name, &rp.Body, &rp.ImageURL, &rp.CreatedAt); err != nil {
-		return Post{}, fmt.Errorf("QueryRow error, %v", err)
+		return Post{}, fmt.Errorf("Scan error, %v", err)
 	}
 
 	return

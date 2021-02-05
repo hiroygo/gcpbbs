@@ -63,7 +63,7 @@
                 })
                 .catch(reason => {
                     console.log(reason);
-                    alert("投稿の読み込みに失敗しました");
+                    alert("投稿の読み込みに失敗しました: " + reason);
                 });
         };
 
@@ -95,7 +95,7 @@
                 })
                 .catch(reason => {
                     console.log(reason);
-                    alert("投稿に失敗しました");
+                    alert("投稿に失敗しました: " + reason);
                 });
         };
 
