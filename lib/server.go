@@ -157,8 +157,8 @@ func (sv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func writeErrorJSON(w http.ResponseWriter, status int, message string) {
-	w.WriteHeader(status)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
 	w.Write([]byte(fmt.Sprintf(`{"error":"%s"}`, message)))
 }
 
