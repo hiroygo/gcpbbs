@@ -11,7 +11,7 @@
             fetch('/posts')
                 .then(res => {
                     if (!res.ok) {
-                        throw new Error(res.statusText);
+                        throw res;
                     }
                     return res.json();
                 })
@@ -63,7 +63,13 @@
                 })
                 .catch(reason => {
                     console.log(reason);
-                    alert("投稿の読み込みに失敗しました\n" + reason);
+                    if (reason.text) {
+                        reason.text().then(msg => {
+                            alert("投稿の読み込みに失敗しました\n" + msg);
+                        })
+                    } else {
+                        alert("投稿の読み込みに失敗しました");
+                    }
                 });
         };
 
@@ -85,7 +91,7 @@
                 })
                 .then(res => {
                     if (!res.ok) {
-                        throw new Error(res.statusText);
+                        throw res;
                     }
                     return res.json();
                 })
@@ -95,7 +101,13 @@
                 })
                 .catch(reason => {
                     console.log(reason);
-                    alert("投稿に失敗しました\n" + reason);
+                    if (reason.text) {
+                        reason.text().then(msg => {
+                            alert("投稿の読み込みに失敗しました\n" + msg);
+                        })
+                    } else {
+                        alert("投稿の読み込みに失敗しました");
+                    }
                 });
         };
 
