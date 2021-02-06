@@ -64,19 +64,19 @@ func TestGetHandler(t *testing.T) {
 	w := httptest.NewRecorder()
 	sv := lib.NewServer(&testLocalBucket{}, &testDB{posts: expected})
 	lib.ExportServerGetHandler(sv, w, r)
-	rw := w.Result()
-	defer rw.Body.Close()
+	wr := w.Result()
+	defer wr.Body.Close()
 
-	if rw.StatusCode != http.StatusOK {
-		t.Fatalf("Status code error, %v", rw.StatusCode)
+	if wr.StatusCode != http.StatusOK {
+		t.Errorf("Status code error, %v", wr.StatusCode)
 	}
 
 	var actual []lib.Post
-	if err := json.NewDecoder(rw.Body).Decode(&actual); err != nil {
+	if err := json.NewDecoder(wr.Body).Decode(&actual); err != nil {
 		t.Fatalf("Decode error, %v", err)
 	}
-	if len(actual) != len(expected) {
-		t.Fatalf("len error, len(expected): %v != len(actual): %v", len(expected), len(actual))
+	if len(expected) != len(actual) {
+		t.Fatalf("len error, len(expected) = %v, got len(actual) = %v", len(expected), len(actual))
 	}
 	for i := range actual {
 		a := actual[i]
@@ -127,59 +127,58 @@ func newPostRequest(name, body string, img []byte) (*http.Request, error) {
 	return r, nil
 }
 
+func createTestPng(dir, name string, minFilesize int) (path string, rerr error) {
+	p := filepath.Join(dir, name)
+	f, err := os.Create(p)
+	if err != nil {
+		return "", fmt.Errorf("Create error, %v", err)
+	}
+	defer func() {
+		if err := f.Close(); err != nil {
+			rerr = fmt.Errorf("Close error, %v", err)
+		}
+	}()
+
+	e := png.Encoder{CompressionLevel: png.NoCompression}
+	// png filesize = Width*Height*RGBA + other data
+	// Width*Height*RGBA = minFilesize
+	img := image.NewNRGBA(image.Rect(0, 0, minFilesize/4, 1))
+	if err := e.Encode(f, img); err != nil {
+		return "", fmt.Errorf("Encode error, %v", err)
+	}
+	return p, nil
+}
+
+func loadTestFile(t *testing.T, path string) []byte {
+	t.Helper()
+	b, err := ioutil.ReadFile(path)
+	if err != nil {
+		t.Fatal(fmt.Errorf("ReadFile error, %v", err))
+	}
+	return b
+}
+
 func TestPostHandler(t *testing.T) {
 	tempDir := t.TempDir()
-	createPng := func(name string, minFilesize int) (path string, rerr error) {
-		p := filepath.Join(tempDir, name)
-		f, err := os.Create(p)
-		if err != nil {
-			return "", fmt.Errorf("Create error, %v", err)
-		}
-		defer func() {
-			if err := f.Close(); err != nil {
-				rerr = fmt.Errorf("Close error, %v", err)
-			}
-		}()
 
-		e := png.Encoder{CompressionLevel: png.NoCompression}
-		// png filesize = Width*Height*RGBA + other data
-		// Width*Height*RGBA = minFilesize
-		img := image.NewNRGBA(image.Rect(0, 0, minFilesize/4, 1))
-		if err := e.Encode(f, img); err != nil {
-			return "", fmt.Errorf("Encode error, %v", err)
-		}
-		return p, nil
-	}
-	loadImg := func(path string) ([]byte, error) {
-		if path == "" {
-			return nil, nil
-		}
-		b, err := ioutil.ReadFile(path)
-		if err != nil {
-			return nil, fmt.Errorf("ReadFile error, %v", err)
-		}
-		return b, nil
-	}
-
-	// create test data
-	largePng, err := createPng("largePng", lib.ExportMaxFilesize)
+	// create large test image
+	largePng, err := createTestPng(tempDir, "largePng", lib.ExportMaxFilesize)
 	if err != nil {
 		t.Fatalf("createPng error, %v", err)
 	}
-
 	cases := []struct {
 		name              string
 		expectedName      string
 		expectedBody      string
 		expectedCreatedAt time.Time
-		imgPath           string
+		expectedImg       []byte
 		wantErr           bool
 	}{
-		{name: "jpeg", expectedName: "Sophia", expectedBody: "bowwow", expectedCreatedAt: time.Now(), imgPath: "../testdata/go.jpg", wantErr: false},
-		{name: "png", expectedName: "gopher", expectedBody: "hello", expectedCreatedAt: time.Now(), imgPath: "../testdata/go.png", wantErr: false},
-		{name: "noimage", expectedName: "koro", expectedBody: "wanwan", expectedCreatedAt: time.Now(), imgPath: "", wantErr: false},
-		{name: "maxfilesize err", expectedName: "koro", expectedBody: "wanwan", expectedCreatedAt: time.Now(), imgPath: largePng, wantErr: true},
-		{name: "not an image err", expectedName: "koro", expectedBody: "wanwan", expectedCreatedAt: time.Now(), imgPath: "../testdata/go.txt", wantErr: true},
+		{name: "jpeg", expectedName: "Sophia", expectedBody: "bowwow", expectedCreatedAt: time.Now(), expectedImg: loadTestFile(t, "../testdata/go.jpg"), wantErr: false},
+		{name: "png", expectedName: "gopher", expectedBody: "hello", expectedCreatedAt: time.Now(), expectedImg: loadTestFile(t, "../testdata/go.png"), wantErr: false},
+		{name: "noimage", expectedName: "koro", expectedBody: "wanwan", expectedCreatedAt: time.Now(), expectedImg: nil, wantErr: false},
+		{name: "maxfilesize err", expectedName: "koro", expectedBody: "wanwan", expectedCreatedAt: time.Now(), expectedImg: loadTestFile(t, largePng), wantErr: true},
+		{name: "not an image err", expectedName: "koro", expectedBody: "wanwan", expectedCreatedAt: time.Now(), expectedImg: loadTestFile(t, "../testdata/go.txt"), wantErr: true},
 	}
 
 	for _, c := range cases {
@@ -187,40 +186,38 @@ func TestPostHandler(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 
-			expectedImg, err := loadImg(c.imgPath)
-			if err != nil {
-				t.Fatalf("loadImg error, %v", err)
-			}
-			r, err := newPostRequest(c.expectedName, c.expectedBody, expectedImg)
+			r, err := newPostRequest(c.expectedName, c.expectedBody, c.expectedImg)
 			if err != nil {
 				t.Fatalf("newPostRequest error, %v", err)
 			}
 			w := httptest.NewRecorder()
 			sv := lib.NewServer(&testLocalBucket{dir: tempDir}, &testDB{createdAt: c.expectedCreatedAt})
 			lib.ExportServerPostHandler(sv, w, r)
-			rw := w.Result()
-			defer rw.Body.Close()
+			wr := w.Result()
+			defer wr.Body.Close()
 
-			if c.wantErr && rw.StatusCode != http.StatusOK {
+			if c.wantErr && wr.StatusCode != http.StatusOK {
 				return
 			}
-			if rw.StatusCode != http.StatusOK {
-				t.Fatalf("Status code error, %v", rw.StatusCode)
+			if wr.StatusCode != http.StatusOK {
+				t.Errorf("Status code error, %v", wr.StatusCode)
 			}
 			var actual lib.Post
-			if err := json.NewDecoder(rw.Body).Decode(&actual); err != nil {
+			if err := json.NewDecoder(wr.Body).Decode(&actual); err != nil {
 				t.Fatalf("Decode error, %v", err)
 			}
 			if actual.Name != c.expectedName || actual.Body != c.expectedBody || !actual.CreatedAt.Equal(c.expectedCreatedAt) {
 				t.Fatalf("want postHandler() = (%v, %v, %v), got (%v, %v, %v)",
 					c.expectedName, c.expectedBody, c.expectedCreatedAt, actual.Name, actual.Body, actual.CreatedAt)
 			}
-			actualImg, err := loadImg(actual.ImageURL)
-			if err != nil {
-				t.Fatalf("loadImg error, %v", err)
-			}
-			if !bytes.Equal(actualImg, expectedImg) {
+			if c.expectedImg == nil && actual.ImageURL != "" {
 				t.Fatal("Image does not match error")
+			}
+			if c.expectedImg != nil {
+				actualImg := loadTestFile(t, actual.ImageURL)
+				if !bytes.Equal(actualImg, c.expectedImg) {
+					t.Fatal("Image does not match error")
+				}
 			}
 		})
 	}
