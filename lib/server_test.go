@@ -46,12 +46,12 @@ func (b *testLocalBucket) Upload(objName string, obj io.Reader) (string, error) 
 	path := filepath.Join(b.dir, objName)
 	f, err := os.Create(path)
 	if err != nil {
-		return "", fmt.Errorf("Create error, %v", err)
+		return "", fmt.Errorf("Create error, %w", err)
 	}
 	defer f.Close()
 
 	if _, err := io.Copy(f, obj); err != nil {
-		return "", fmt.Errorf("Copy error, %v", err)
+		return "", fmt.Errorf("Copy error, %w", err)
 	}
 
 	return path, nil
@@ -98,10 +98,10 @@ func newPostRequest(name, body string, img []byte) (*http.Request, error) {
 	jsonHeader.Set("Content-Disposition", `form-data; name="json"`)
 	jsonPart, err := writer.CreatePart(jsonHeader)
 	if err != nil {
-		return nil, fmt.Errorf("CreatePart error, %v", err)
+		return nil, fmt.Errorf("CreatePart error, %w", err)
 	}
 	if _, err := fmt.Fprintf(jsonPart, `{"name":"%s", "body":"%s"}`, name, body); err != nil {
-		return nil, fmt.Errorf("Fprintf error, %v", err)
+		return nil, fmt.Errorf("Fprintf error, %w", err)
 	}
 
 	// image
@@ -110,16 +110,16 @@ func newPostRequest(name, body string, img []byte) (*http.Request, error) {
 		imgHeader.Set("Content-Disposition", `form-data; name="attachment-file"; filename="dummy"`)
 		imgPart, err := writer.CreatePart(imgHeader)
 		if err != nil {
-			return nil, fmt.Errorf("CreatePart error, %v", err)
+			return nil, fmt.Errorf("CreatePart error, %w", err)
 		}
 		if _, err := imgPart.Write(img); err != nil {
-			return nil, fmt.Errorf("Write error, %v", err)
+			return nil, fmt.Errorf("Write error, %w", err)
 		}
 	}
 
 	// 最後に閉じる
 	if err := writer.Close(); err != nil {
-		return nil, fmt.Errorf("Close error, %v", err)
+		return nil, fmt.Errorf("Close error, %w", err)
 	}
 
 	r := httptest.NewRequest(http.MethodPost, "/", &buf)
@@ -131,11 +131,11 @@ func createTestPng(dir, name string, minFilesize int) (path string, rerr error) 
 	p := filepath.Join(dir, name)
 	f, err := os.Create(p)
 	if err != nil {
-		return "", fmt.Errorf("Create error, %v", err)
+		return "", fmt.Errorf("Create error, %w", err)
 	}
 	defer func() {
 		if err := f.Close(); err != nil {
-			rerr = fmt.Errorf("Close error, %v", err)
+			rerr = fmt.Errorf("Close error, %w", err)
 		}
 	}()
 
@@ -144,7 +144,7 @@ func createTestPng(dir, name string, minFilesize int) (path string, rerr error) 
 	// Width*Height*RGBA = minFilesize
 	img := image.NewNRGBA(image.Rect(0, 0, minFilesize/4, 1))
 	if err := e.Encode(f, img); err != nil {
-		return "", fmt.Errorf("Encode error, %v", err)
+		return "", fmt.Errorf("Encode error, %w", err)
 	}
 	return p, nil
 }
@@ -153,7 +153,7 @@ func loadTestFile(t *testing.T, path string) []byte {
 	t.Helper()
 	b, err := ioutil.ReadFile(path)
 	if err != nil {
-		t.Fatal(fmt.Errorf("ReadFile error, %v", err))
+		t.Fatalf("ReadFile error, %v", err)
 	}
 	return b
 }

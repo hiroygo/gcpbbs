@@ -38,7 +38,7 @@ func (sv *Server) postHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := json.Unmarshal([]byte(data), &p); err != nil {
-		writeAndLogError(w, http.StatusBadRequest, fmt.Errorf("Unmarshal error, %v", err))
+		writeAndLogError(w, http.StatusBadRequest, fmt.Errorf("Unmarshal error, %w", err))
 		return
 	}
 
@@ -54,23 +54,23 @@ func (sv *Server) postHandler(w http.ResponseWriter, r *http.Request) {
 		// 画像か確認する
 		_, format, err := image.DecodeConfig(img)
 		if err != nil {
-			writeAndLogError(w, http.StatusUnsupportedMediaType, fmt.Errorf("DecodeConfig error, %v", err))
+			writeAndLogError(w, http.StatusUnsupportedMediaType, fmt.Errorf("DecodeConfig error, %w", err))
 			return
 		}
 		// DecodeConfig で移動した offset を先頭に戻す
 		// DecodeConfig はファイルヘッダなどを読み、ファイル全体は読み込まない
 		if _, err := img.Seek(0, io.SeekStart); err != nil {
-			writeAndLogError(w, http.StatusInternalServerError, fmt.Errorf("Seek error, %v", err))
+			writeAndLogError(w, http.StatusInternalServerError, fmt.Errorf("Seek error, %w", err))
 			return
 		}
 
 		filename, err := randomFilename("." + format)
 		if err != nil {
-			writeAndLogError(w, http.StatusInternalServerError, fmt.Errorf("randomFilename error, %v", err))
+			writeAndLogError(w, http.StatusInternalServerError, fmt.Errorf("randomFilename error, %w", err))
 		}
 		url, err := sv.bucket.Upload(filename, img)
 		if err != nil {
-			writeAndLogError(w, http.StatusInternalServerError, fmt.Errorf("Upload error, %v", err))
+			writeAndLogError(w, http.StatusInternalServerError, fmt.Errorf("Upload error, %w", err))
 			return
 		}
 
@@ -78,14 +78,14 @@ func (sv *Server) postHandler(w http.ResponseWriter, r *http.Request) {
 	case http.ErrMissingFile:
 		p.ImageURL = ""
 	default:
-		writeAndLogError(w, http.StatusInternalServerError, fmt.Errorf("FormFile error, %v", err))
+		writeAndLogError(w, http.StatusInternalServerError, fmt.Errorf("FormFile error, %w", err))
 		return
 	}
 
 	// 投稿内容をデータベースに登録する
 	ret, err := sv.db.Insert(p)
 	if err != nil {
-		writeAndLogError(w, http.StatusInternalServerError, fmt.Errorf("Insert error, %v", err))
+		writeAndLogError(w, http.StatusInternalServerError, fmt.Errorf("Insert error, %w", err))
 		return
 	}
 
@@ -96,7 +96,7 @@ func (sv *Server) postHandler(w http.ResponseWriter, r *http.Request) {
 func (sv *Server) getHandler(w http.ResponseWriter, r *http.Request) {
 	ps, err := sv.db.GetAll()
 	if err != nil {
-		writeAndLogError(w, http.StatusInternalServerError, fmt.Errorf("GetAll error, %v", err))
+		writeAndLogError(w, http.StatusInternalServerError, fmt.Errorf("GetAll error, %w", err))
 		return
 	}
 	writeJSON(w, http.StatusOK, ps)
@@ -141,14 +141,14 @@ func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(data); err != nil {
-		log.Println(fmt.Sprintf("Encode error, %v", err))
+		log.Println(fmt.Errorf("Encode error, %w", err))
 	}
 }
 
 func randomFilename(ext string) (string, error) {
 	id, err := uuid.NewRandom()
 	if err != nil {
-		return "", fmt.Errorf("NewRandom error, %v", err)
+		return "", fmt.Errorf("NewRandom error, %w", err)
 	}
 	return fmt.Sprintf("%s%s", id, ext), nil
 }
