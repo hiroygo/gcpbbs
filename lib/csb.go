@@ -20,7 +20,7 @@ type gcsBucket struct {
 	name   string
 }
 
-func NewGCSBucket(c *storage.Client, name string) CloudStorageBucket {
+func OpenGCSBucket(c *storage.Client, name string) CloudStorageBucket {
 	return &gcsBucket{client: c, name: name}
 }
 

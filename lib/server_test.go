@@ -1,141 +1,223 @@
-package lib_test
+package lib
 
 import (
 	"bytes"
+	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"image"
 	"image/png"
-	"io"
 	"io/ioutil"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/textproto"
 	"os"
+	"path"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/hiroygo/gcpbbs/lib"
+	"cloud.google.com/go/storage"
+	_ "github.com/go-sql-driver/mysql"
+	"github.com/google/uuid"
+	"google.golang.org/api/option"
 )
 
-type testDB struct {
-	posts     []lib.Post
-	createdAt time.Time
-	err       error
-}
+func openTestMySQL(t *testing.T) (*sql.DB, func(t *testing.T)) {
+	t.Helper()
 
-func (d *testDB) GetAll() ([]lib.Post, error) {
-	return d.posts, d.err
-}
-
-func (d *testDB) Insert(p lib.Post) (lib.Post, error) {
-	return lib.Post{Name: p.Name, Body: p.Body, ImageURL: p.ImageURL, CreatedAt: d.createdAt}, d.err
-}
-
-func (d *testDB) Close() error {
-	return d.err
-}
-
-type testLocalBucket struct {
-	dir string
-}
-
-func (b *testLocalBucket) Upload(objName string, obj io.Reader) (string, error) {
-	path := filepath.Join(b.dir, objName)
-	f, err := os.Create(path)
+	conn, err := envDSNToServer()
 	if err != nil {
-		return "", fmt.Errorf("Create error, %w", err)
+		t.Fatal(err)
 	}
-	defer f.Close()
+	newDB, err := sql.Open("mysql", conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := newDB.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}()
 
-	if _, err := io.Copy(f, obj); err != nil {
-		return "", fmt.Errorf("Copy error, %w", err)
+	// create database
+	id, err := uuid.NewRandom()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbname := "test_" + strings.ReplaceAll(id.String(), "-", "")
+	_, err = newDB.Exec(fmt.Sprintf("CREATE DATABASE %s", dbname))
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	return path, nil
+	// create table
+	db, err := sql.Open("mysql", getDSNToDB(conn, dbname))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TABLE posts (
+        id int(10) unsigned NOT NULL AUTO_INCREMENT,
+        name varchar(50) NOT NULL,
+        body text NOT NULL,
+        imageurl varchar(512) DEFAULT NULL,
+        created_at datetime NOT NULL,
+        PRIMARY KEY (id)
+    )`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cleanup := func(t *testing.T) {
+		t.Helper()
+
+		db, err := sql.Open("mysql", conn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}()
+
+		_, err = db.Exec(fmt.Sprintf("DROP DATABASE %s", dbname))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	return db, cleanup
 }
 
-func TestGetHandler(t *testing.T) {
-	expected := []lib.Post{lib.Post{Name: "gopher", Body: "hello world!", ImageURL: "img.jpg", CreatedAt: time.Now()}}
+func insertIntoDB(t *testing.T, db *sql.DB, ps []Post) {
+	t.Helper()
 
-	r := httptest.NewRequest(http.MethodGet, "/", nil)
-	w := httptest.NewRecorder()
-	sv := lib.NewServer(&testLocalBucket{}, &testDB{posts: expected})
-	lib.ExportServerGetHandler(sv, w, r)
-	wr := w.Result()
-	defer wr.Body.Close()
+	stmt, err := db.Prepare("INSERT INTO posts VALUES(NULL, ?, ?, ?, ?)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := stmt.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}()
 
-	if wr.StatusCode != http.StatusOK {
-		t.Errorf("Status code error, %v", wr.StatusCode)
-	}
-
-	var actual []lib.Post
-	if err := json.NewDecoder(wr.Body).Decode(&actual); err != nil {
-		t.Fatalf("Decode error, %v", err)
-	}
-	if len(expected) != len(actual) {
-		t.Fatalf("len error, len(expected) = %v, got len(actual) = %v", len(expected), len(actual))
-	}
-	for i := range actual {
-		a := actual[i]
-		e := expected[i]
-		if a.Name != e.Name || a.Body != e.Body ||
-			a.ImageURL != e.ImageURL || !a.CreatedAt.Equal(e.CreatedAt) {
-			t.Errorf("want getHandler() = %v, got %v", expected, actual)
+	for _, p := range ps {
+		_, err := stmt.Exec(p.Name, p.Body, p.ImageURL, p.CreatedAt)
+		if err != nil {
+			t.Fatal(err)
 		}
 	}
 }
 
-func newPostRequest(name, body string, img []byte) (*http.Request, error) {
+func TestGetHandler(t *testing.T) {
+	db, cleanup := openTestMySQL(t)
+	defer cleanup(t)
+
+	// https://javorszky.co.uk/2020/10/07/how-parsetime-in-sql-connections-work-with-time-time-in-go/
+	// 以下の FAIL にならないように Round() でミリ秒以下を丸める
+	// --- FAIL: TestGetHandler (0.88s)
+	//     server_test.go:137: want getHandler() =
+	//     [{gopher hello world! img.jpg 2021-02-14 04:11:50.538732991 +0000 UTC}],
+	//     got [{gopher hello world! img.jpg 2021-02-14 04:11:51 +0000 UTC}]
+	expecteds := []Post{
+		Post{
+			Name:      "gopher",
+			Body:      "hello world!",
+			ImageURL:  "",
+			CreatedAt: time.Now().Round(time.Second),
+		},
+		Post{
+			Name:      "いぬ",
+			Body:      "わんわん",
+			ImageURL:  "dog.jpg",
+			CreatedAt: time.Now().Round(time.Second),
+		},
+	}
+	insertIntoDB(t, db, expecteds)
+
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	w := httptest.NewRecorder()
+	sv := NewServer(nil, &mySQL{db})
+	sv.getHandler(w, r)
+	wr := w.Result()
+	defer wr.Body.Close()
+
+	if wr.StatusCode != http.StatusOK {
+		t.Errorf("got error StatusCode, %v", wr.StatusCode)
+	}
+
+	var actuals []Post
+	if err := json.NewDecoder(wr.Body).Decode(&actuals); err != nil {
+		t.Fatal(err)
+	}
+	if len(expecteds) != len(actuals) {
+		t.Fatalf("len does not match, len(expecteds) = %v != len(actuals) = %v", len(expecteds), len(actuals))
+	}
+	for i := range actuals {
+		a := actuals[i]
+		e := expecteds[i]
+		if a.Name != e.Name || a.Body != e.Body ||
+			a.ImageURL != e.ImageURL || !a.CreatedAt.Equal(e.CreatedAt) {
+			t.Errorf("want getHandler() = %v, got %v", expecteds, actuals)
+		}
+	}
+}
+
+func newPostRequest(t *testing.T, name, body string, img []byte) *http.Request {
+	t.Helper()
+
 	var buf bytes.Buffer
 	writer := multipart.NewWriter(&buf)
-
 	// json
 	jsonHeader := make(textproto.MIMEHeader)
 	jsonHeader.Set("Content-Type", `application/json; charset=utf-8`)
 	jsonHeader.Set("Content-Disposition", `form-data; name="json"`)
 	jsonPart, err := writer.CreatePart(jsonHeader)
 	if err != nil {
-		return nil, fmt.Errorf("CreatePart error, %w", err)
+		t.Fatal(err)
 	}
 	if _, err := fmt.Fprintf(jsonPart, `{"name":"%s", "body":"%s"}`, name, body); err != nil {
-		return nil, fmt.Errorf("Fprintf error, %w", err)
+		t.Fatal(err)
 	}
-
 	// image
 	if img != nil {
 		imgHeader := make(textproto.MIMEHeader)
 		imgHeader.Set("Content-Disposition", `form-data; name="attachment-file"; filename="dummy"`)
 		imgPart, err := writer.CreatePart(imgHeader)
 		if err != nil {
-			return nil, fmt.Errorf("CreatePart error, %w", err)
+			t.Fatal(err)
 		}
 		if _, err := imgPart.Write(img); err != nil {
-			return nil, fmt.Errorf("Write error, %w", err)
+			t.Fatal(err)
 		}
 	}
 
 	// 最後に閉じる
 	if err := writer.Close(); err != nil {
-		return nil, fmt.Errorf("Close error, %w", err)
+		t.Fatal(err)
 	}
 
 	r := httptest.NewRequest(http.MethodPost, "/", &buf)
 	r.Header.Set("Content-Type", writer.FormDataContentType())
-	return r, nil
+	return r
 }
 
-func createTestPng(dir, name string, minFilesize int) (path string, rerr error) {
+func createTestPng(t *testing.T, dir, name string, minFilesize int) string {
+	t.Helper()
+
 	p := filepath.Join(dir, name)
 	f, err := os.Create(p)
 	if err != nil {
-		return "", fmt.Errorf("Create error, %w", err)
+		t.Fatal(err)
 	}
 	defer func() {
 		if err := f.Close(); err != nil {
-			rerr = fmt.Errorf("Close error, %w", err)
+			t.Fatal(err)
 		}
 	}()
 
@@ -144,41 +226,103 @@ func createTestPng(dir, name string, minFilesize int) (path string, rerr error) 
 	// Width*Height*RGBA = minFilesize
 	img := image.NewNRGBA(image.Rect(0, 0, minFilesize/4, 1))
 	if err := e.Encode(f, img); err != nil {
-		return "", fmt.Errorf("Encode error, %w", err)
+		t.Fatal(err)
 	}
-	return p, nil
+	return p
 }
 
-func loadTestFile(t *testing.T, path string) []byte {
+func loadFile(t *testing.T, path string) []byte {
 	t.Helper()
+
 	b, err := ioutil.ReadFile(path)
 	if err != nil {
-		t.Fatalf("ReadFile error, %v", err)
+		t.Fatal(err)
 	}
 	return b
 }
 
-func TestPostHandler(t *testing.T) {
-	tempDir := t.TempDir()
+func deleteGCSObject(t *testing.T, client *storage.Client, bucketName, o string) {
+	t.Helper()
 
-	// create large test image
-	largePng, err := createTestPng(tempDir, "largePng", lib.ExportMaxFilesize)
-	if err != nil {
-		t.Fatalf("createPng error, %v", err)
+	if err := client.Bucket(bucketName).Object(o).Delete(context.Background()); err != nil {
+		t.Fatal(err)
 	}
+}
+
+func downloadFile(t *testing.T, url string) []byte {
+	t.Helper()
+
+	r, err := http.Get(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := r.Body.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}()
+
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("got error StatusCode, %v", r.StatusCode)
+	}
+
+	b, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return b
+}
+
+func newTestGCSClient(t *testing.T) *storage.Client {
+	t.Helper()
+
+	v := os.Getenv("GCS_CREDSFILE")
+	if v != "" {
+		c, err := storage.NewClient(context.Background(), option.WithCredentialsFile(v))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	c, err := storage.NewClient(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func TestPostHandler(t *testing.T) {
+	db, cleanup := openTestMySQL(t)
+	// t.Parallel() で t.Run() が並行に動くときは defer でなく t.Cleanup() を使う
+	t.Cleanup(func() { cleanup(t) })
+
+	gcsClient := newTestGCSClient(t)
+	t.Cleanup(func() {
+		if err := gcsClient.Close(); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	bucketName, err := EnvGCSBucket()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// create large png
+	largePng := createTestPng(t, t.TempDir(), "largePng", maxFilesize)
 	cases := []struct {
-		name              string
-		expectedName      string
-		expectedBody      string
-		expectedCreatedAt time.Time
-		expectedImg       []byte
-		wantErr           bool
+		name         string
+		expectedName string
+		expectedBody string
+		expectedImg  []byte
+		wantErr      bool
 	}{
-		{name: "jpeg", expectedName: "Sophia", expectedBody: "bowwow", expectedCreatedAt: time.Now(), expectedImg: loadTestFile(t, "../testdata/go.jpg"), wantErr: false},
-		{name: "png", expectedName: "gopher", expectedBody: "hello", expectedCreatedAt: time.Now(), expectedImg: loadTestFile(t, "../testdata/go.png"), wantErr: false},
-		{name: "noimage", expectedName: "koro", expectedBody: "wanwan", expectedCreatedAt: time.Now(), expectedImg: nil, wantErr: false},
-		{name: "maxfilesize err", expectedName: "koro", expectedBody: "wanwan", expectedCreatedAt: time.Now(), expectedImg: loadTestFile(t, largePng), wantErr: true},
-		{name: "not an image err", expectedName: "koro", expectedBody: "wanwan", expectedCreatedAt: time.Now(), expectedImg: loadTestFile(t, "../testdata/go.txt"), wantErr: true},
+		{name: "jpeg", expectedName: "Sophia", expectedBody: "bowwow", expectedImg: loadFile(t, "../testdata/go.jpg"), wantErr: false},
+		{name: "png", expectedName: "gopher", expectedBody: "hello", expectedImg: loadFile(t, "../testdata/go.png"), wantErr: false},
+		{name: "noimage", expectedName: "koro", expectedBody: "wanwan", expectedImg: nil, wantErr: false},
+		{name: "maxfilesize err", expectedName: "koro", expectedBody: "wanwan", expectedImg: loadFile(t, largePng), wantErr: true},
+		{name: "not an image err", expectedName: "koro", expectedBody: "wanwan", expectedImg: loadFile(t, "../testdata/go.txt"), wantErr: true},
 	}
 
 	for _, c := range cases {
@@ -186,13 +330,10 @@ func TestPostHandler(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 
-			r, err := newPostRequest(c.expectedName, c.expectedBody, c.expectedImg)
-			if err != nil {
-				t.Fatalf("newPostRequest error, %v", err)
-			}
+			sv := NewServer(OpenGCSBucket(gcsClient, bucketName), &mySQL{db})
+			r := newPostRequest(t, c.expectedName, c.expectedBody, c.expectedImg)
 			w := httptest.NewRecorder()
-			sv := lib.NewServer(&testLocalBucket{dir: tempDir}, &testDB{createdAt: c.expectedCreatedAt})
-			lib.ExportServerPostHandler(sv, w, r)
+			sv.postHandler(w, r)
 			wr := w.Result()
 			defer wr.Body.Close()
 
@@ -200,23 +341,32 @@ func TestPostHandler(t *testing.T) {
 				return
 			}
 			if wr.StatusCode != http.StatusOK {
-				t.Errorf("Status code error, %v", wr.StatusCode)
+				t.Errorf("got error StatusCode, %v", wr.StatusCode)
 			}
-			var actual lib.Post
+			var actual Post
 			if err := json.NewDecoder(wr.Body).Decode(&actual); err != nil {
-				t.Fatalf("Decode error, %v", err)
+				t.Fatal(err)
 			}
-			if actual.Name != c.expectedName || actual.Body != c.expectedBody || !actual.CreatedAt.Equal(c.expectedCreatedAt) {
-				t.Fatalf("want postHandler() = (%v, %v, %v), got (%v, %v, %v)",
-					c.expectedName, c.expectedBody, c.expectedCreatedAt, actual.Name, actual.Body, actual.CreatedAt)
+			defer func() {
+				if actual.ImageURL != "" {
+					deleteGCSObject(t, gcsClient, bucketName, path.Base(actual.ImageURL))
+				}
+			}()
+
+			// CreatedAt はチェックしない。フォーマット異常などでパースできなければ
+			// Scan(&p.Name, &p.Body, &p.ImageURL, &p.CreatedAt) でエラーになるはず
+			if actual.Name != c.expectedName || actual.Body != c.expectedBody {
+				t.Fatalf("want postHandler() = (%v, %v), got (%v, %v)",
+					c.expectedName, c.expectedBody, actual.Name, actual.Body)
 			}
-			if c.expectedImg == nil && actual.ImageURL != "" {
-				t.Fatal("Image does not match error")
+			if c.expectedImg != nil && actual.ImageURL == "" {
+				t.Fatal("ImageURL is empty")
 			}
+
 			if c.expectedImg != nil {
-				actualImg := loadTestFile(t, actual.ImageURL)
+				actualImg := downloadFile(t, actual.ImageURL)
 				if !bytes.Equal(actualImg, c.expectedImg) {
-					t.Fatal("Image does not match error")
+					t.Error("image does not match")
 				}
 			}
 		})

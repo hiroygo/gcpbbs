@@ -14,23 +14,23 @@ type DB interface {
 }
 
 type mySQL struct {
-	rawDB *sql.DB
+	db *sql.DB
 }
 
-func NewMySQL(dsn string) (DB, error) {
+func OpenMySQL(dsn string) (DB, error) {
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("Open error, %w", err)
 	}
-	return &mySQL{rawDB: db}, nil
+	return &mySQL{db}, nil
 }
 
 func (s *mySQL) Close() error {
-	if s.rawDB == nil {
+	if s.db == nil {
 		return nil
 	}
 
-	err := s.rawDB.Close()
+	err := s.db.Close()
 	if err != nil {
 		return fmt.Errorf("Close error, %w", err)
 	}
@@ -39,7 +39,7 @@ func (s *mySQL) Close() error {
 }
 
 func (s *mySQL) Insert(p Post) (rp Post, rerr error) {
-	stmt, err := s.rawDB.Prepare("INSERT INTO posts VALUES(NULL, ?, ?, ?, NOW())")
+	stmt, err := s.db.Prepare("INSERT INTO posts VALUES(NULL, ?, ?, ?, NOW())")
 	if err != nil {
 		return Post{}, fmt.Errorf("Prepare error, %w", err)
 	}
@@ -60,7 +60,7 @@ func (s *mySQL) Insert(p Post) (rp Post, rerr error) {
 		return Post{}, fmt.Errorf("LastInsertId error, %w", err)
 	}
 
-	if err := s.rawDB.QueryRow("SELECT name, body, imageurl, created_at FROM posts WHERE id = ?", id).Scan(&rp.Name, &rp.Body, &rp.ImageURL, &rp.CreatedAt); err != nil {
+	if err := s.db.QueryRow("SELECT name, body, imageurl, created_at FROM posts WHERE id = ?", id).Scan(&rp.Name, &rp.Body, &rp.ImageURL, &rp.CreatedAt); err != nil {
 		return Post{}, fmt.Errorf("Scan error, %w", err)
 	}
 
@@ -68,7 +68,7 @@ func (s *mySQL) Insert(p Post) (rp Post, rerr error) {
 }
 
 func (s *mySQL) GetAll() (rps []Post, rerr error) {
-	rows, err := s.rawDB.Query("SELECT name, body, imageurl, created_at FROM posts")
+	rows, err := s.db.Query("SELECT name, body, imageurl, created_at FROM posts")
 	if err != nil {
 		return nil, fmt.Errorf("Query error, %w", err)
 	}

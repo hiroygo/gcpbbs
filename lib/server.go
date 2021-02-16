@@ -58,7 +58,6 @@ func (sv *Server) postHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// DecodeConfig で移動した offset を先頭に戻す
-		// DecodeConfig はファイルヘッダなどを読み、ファイル全体は読み込まない
 		if _, err := img.Seek(0, io.SeekStart); err != nil {
 			writeAndLogError(w, http.StatusInternalServerError, fmt.Errorf("Seek error, %w", err))
 			return

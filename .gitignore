@@ -15,3 +15,5 @@
 # vendor/
 
 /gcpbbs
+/cloud_sql_proxy
+/key.json
