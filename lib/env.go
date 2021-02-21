@@ -13,11 +13,11 @@ func env(k string) (string, error) {
 	return v, nil
 }
 
-func getDSNToDB(conn, dbname string) string {
+func getMySQLDSNToDB(conn, dbname string) string {
 	return fmt.Sprintf("%s%s?parseTime=true", conn, dbname)
 }
 
-func envDSNToServer() (string, error) {
+func envMySQLDSNToServer() (string, error) {
 	user, err := env("DB_USER")
 	if err != nil {
 		return "", fmt.Errorf("env error, %w", err)
@@ -36,8 +36,8 @@ func envDSNToServer() (string, error) {
 	return fmt.Sprintf("%s:%s@unix(//cloudsql/%s)/", user, pw, icn), nil
 }
 
-func EnvDSNToDB() (string, error) {
-	conn, err := envDSNToServer()
+func EnvMySQLDSNToDB() (string, error) {
+	conn, err := envMySQLDSNToServer()
 	if err != nil {
 		return "", fmt.Errorf("envDSNToServer error, %w", err)
 	}
@@ -46,7 +46,7 @@ func EnvDSNToDB() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("env error, %w", err)
 	}
-	return getDSNToDB(conn, name), nil
+	return getMySQLDSNToDB(conn, name), nil
 }
 
 func EnvGCSBucket() (string, error) {

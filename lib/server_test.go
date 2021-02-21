@@ -18,7 +18,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"cloud.google.com/go/storage"
 	_ "github.com/go-sql-driver/mysql"
@@ -29,7 +28,7 @@ import (
 func openTestMySQL(t *testing.T) (*sql.DB, func(t *testing.T)) {
 	t.Helper()
 
-	conn, err := envDSNToServer()
+	conn, err := envMySQLDSNToServer()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +54,7 @@ func openTestMySQL(t *testing.T) (*sql.DB, func(t *testing.T)) {
 	}
 
 	// create table
-	db, err := sql.Open("mysql", getDSNToDB(conn, dbname))
+	db, err := sql.Open("mysql", getMySQLDSNToDB(conn, dbname))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +95,7 @@ func openTestMySQL(t *testing.T) (*sql.DB, func(t *testing.T)) {
 func insertIntoDB(t *testing.T, db *sql.DB, ps []Post) {
 	t.Helper()
 
-	stmt, err := db.Prepare("INSERT INTO posts VALUES(NULL, ?, ?, ?, ?)")
+	stmt, err := db.Prepare("INSERT INTO posts VALUES(NULL, ?, ?, ?, NOW())")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +106,7 @@ func insertIntoDB(t *testing.T, db *sql.DB, ps []Post) {
 	}()
 
 	for _, p := range ps {
-		_, err := stmt.Exec(p.Name, p.Body, p.ImageURL, p.CreatedAt)
+		_, err := stmt.Exec(p.Name, p.Body, p.ImageURL)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -118,24 +117,16 @@ func TestGetHandler(t *testing.T) {
 	db, cleanup := openTestMySQL(t)
 	defer cleanup(t)
 
-	// https://javorszky.co.uk/2020/10/07/how-parsetime-in-sql-connections-work-with-time-time-in-go/
-	// 以下の FAIL にならないように Round() でミリ秒以下を丸める
-	// --- FAIL: TestGetHandler (0.88s)
-	//     server_test.go:137: want getHandler() =
-	//     [{gopher hello world! img.jpg 2021-02-14 04:11:50.538732991 +0000 UTC}],
-	//     got [{gopher hello world! img.jpg 2021-02-14 04:11:51 +0000 UTC}]
 	expecteds := []Post{
 		Post{
-			Name:      "gopher",
-			Body:      "hello world!",
-			ImageURL:  "",
-			CreatedAt: time.Now().Round(time.Second),
+			Name:     "gopher",
+			Body:     "hello world!",
+			ImageURL: "",
 		},
 		Post{
-			Name:      "いぬ",
-			Body:      "わんわん",
-			ImageURL:  "dog.jpg",
-			CreatedAt: time.Now().Round(time.Second),
+			Name:     "いぬ",
+			Body:     "わんわん",
+			ImageURL: "dog.jpg",
 		},
 	}
 	insertIntoDB(t, db, expecteds)
@@ -161,9 +152,8 @@ func TestGetHandler(t *testing.T) {
 	for i := range actuals {
 		a := actuals[i]
 		e := expecteds[i]
-		if a.Name != e.Name || a.Body != e.Body ||
-			a.ImageURL != e.ImageURL || !a.CreatedAt.Equal(e.CreatedAt) {
-			t.Errorf("want getHandler() = %v, got %v", expecteds, actuals)
+		if a.Name != e.Name || a.Body != e.Body || a.ImageURL != e.ImageURL {
+			t.Errorf("want getHandler() = (%v %v, %v), got (%v, %v, %v)", e.Name, e.Body, e.ImageURL, a.Name, a.Body, a.ImageURL)
 		}
 	}
 }
@@ -353,8 +343,7 @@ func TestPostHandler(t *testing.T) {
 				}
 			}()
 
-			// CreatedAt はチェックしない。フォーマット異常などでパースできなければ
-			// Scan(&p.Name, &p.Body, &p.ImageURL, &p.CreatedAt) でエラーになるはず
+			// CreatedAt はデータベースで NOW() するのでチェックしない
 			if actual.Name != c.expectedName || actual.Body != c.expectedBody {
 				t.Fatalf("want postHandler() = (%v, %v), got (%v, %v)",
 					c.expectedName, c.expectedBody, actual.Name, actual.Body)

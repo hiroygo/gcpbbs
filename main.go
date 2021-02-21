@@ -24,7 +24,7 @@ func main() {
 	bucket := lib.OpenGCSBucket(gcsClient, bucketName)
 
 	// Cloud SQL
-	dsn, err := lib.EnvDSNToDB()
+	dsn, err := lib.EnvMySQLDSNToDB()
 	if err != nil {
 		log.Fatal(err)
 	}
